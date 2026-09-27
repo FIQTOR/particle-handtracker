@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Christmas Memories Particle System</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            color: white;
+            font-family: sans-serif;
+        }
+
+        #video-container {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            width: 160px;
+            height: 120px;
+            z-index: 10;
+            border: 2px solid #333;
+            transform: scaleX(-1);
+            opacity: 0.7;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            pointer-events: none;
+            transition: opacity 0.5s;
+            text-align: center;
+        }
+
+        .lil-gui {
+            --background-color: #1a1a1a;
+            --text-color: #eee;
+            --title-background-color: #880000;
+        }
+
+        /* Christmas Red Theme */
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+
+<body>
+
+    <div id="loading">Loading System...<br><span style="font-size:14px; color:#aaa;">(Ensure images 1.jpg - 20.jpg are
+            in folder)</span></div>
+    <div id="video-container">
+        <video class="input_video"></video>
+    </div>
+
+    <canvas id="imageCanvas" style="display:none;"></canvas>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import GUI from 'three/addons/libs/lil-gui.module.min.js';
+
+        // --- Configuration ---
+        const PARTICLE_COUNT = 25000; // Increased for better photo resolution
+        const PARTICLE_SIZE = 0.12;
+
+        // --- Photo Configuration ---
+        // We will cycle through these names
+        const PHOTO_LIST = Array.from({ length: 20 }, (_, i) => `${i + 1}.jpg`);
+        let currentPhotoIndex = 0;
+
+        // --- State Variables ---
+        let handOpenness = 0;
+        let targetShape = 'tree'; // Start with Christmas Tree
+        let time = 0;
+        let isPhotoLoaded = false;
+
+        // --- Three.js Setup ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 40;
+        camera.position.y = 10;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.5;
+
+        // --- Particle System ---
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(PARTICLE_COUNT * 3);
+        const targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+        const colors = new Float32Array(PARTICLE_COUNT * 3);
+        const targetColors = new Float32Array(PARTICLE_COUNT * 3); // To transition colors smoothly
+
+        // Initialize
+        const initialColor = new THREE.Color(0x00ff00);
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            positions[i * 3] = (Math.random() - 0.5) * 50;
+            positions[i * 3 + 1] = (Math.random() - 0.5) * 50;
+            positions[i * 3 + 2] = (Math.random() - 0.5) * 50;
+
+            targetPositions[i * 3] = positions[i * 3];
+
+            colors[i * 3] = initialColor.r;
+            colors[i * 3 + 1] = initialColor.g;
+            colors[i * 3 + 2] = initialColor.b;
+
+            targetColors[i * 3] = initialColor.r;
+            targetColors[i * 3 + 1] = initialColor.g;
+            targetColors[i * 3 + 2] = initialColor.b;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        // IMPORTANT: vertexColors: true allows every particle to have its own color (for photos)
+        const material = new THREE.PointsMaterial({
+            size: PARTICLE_SIZE,
+            vertexColors: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            transparent: true,
+            opacity: 0.9
+        });
+
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+        // --- Image Processing Logic ---
+        const imgCanvas = document.getElementById('imageCanvas');
+        const ctx = imgCanvas.getContext('2d', { willReadFrequently: true });
+
+        function loadPhoto(filename) {
+            const img = new Image();
+            img.crossOrigin = "Anonymous";
+            img.src = filename;
+
+            img.onload = () => {
+                // Resize logic to keep points dense
+                const aspect = img.width / img.height;
+                const targetHeight = 150;
+                const targetWidth = Math.floor(targetHeight * aspect);
+
+                imgCanvas.width = targetWidth;
+                imgCanvas.height = targetHeight;
+                ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+                const imgData = ctx.getImageData(0, 0, targetWidth, targetHeight).data;
+                const validPixels = [];
+
+                // Scan image for colored pixels
+                for (let y = 0; y < targetHeight; y++) {
+                    for (let x = 0; x < targetWidth; x++) {
+                        const i = (y * targetWidth + x) * 4;
+                        const r = imgData[i] / 255;
+                        const g = imgData[i + 1] / 255;
+                        const b = imgData[i + 2] / 255;
+                        const alpha = imgData[i + 3];
+
+                        if (alpha > 128) { // Only visible pixels
+                            validPixels.push({
+                                x: (x - targetWidth / 2) * 0.2, // Scale down to world units
+                                y: -(y - targetHeight / 2) * 0.2, // Flip Y for 3D
+                                color: { r, g, b }
+                            });
+                        }
+                    }
+                }
+
+                updatePhotoTargets(validPixels);
+                isPhotoLoaded = true;
+                console.log(`Loaded ${filename} with ${validPixels.length} points`);
+            };
+
+            img.onerror = () => {
+                console.warn(`Could not load ${filename}. Make sure it exists.`);
+            };
+        }
+
+        function updatePhotoTargets(pixelData) {
+            // If we have more particles than pixels, hide the extras
+            // If we have more pixels than particles, we truncate (limit of PARTICLE_COUNT)
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const i3 = i * 3;
+
+                if (i < pixelData.length) {
+                    // Assign to pixel position
+                    const p = pixelData[i];
+                    targetPositions[i3] = p.x;
+                    targetPositions[i3 + 1] = p.y;
+                    targetPositions[i3 + 2] = 0; // Flat photo on Z axis
+
+                    targetColors[i3] = p.color.r;
+                    targetColors[i3 + 1] = p.color.g;
+                    targetColors[i3 + 2] = p.color.b;
+                } else {
+                    // Hide extra particles
+                    targetPositions[i3] = (Math.random() - 0.5) * 100; // scatter far away
+                    targetColors[i3] = 0; targetColors[i3 + 1] = 0; targetColors[i3 + 2] = 0;
+                }
+            }
+        }
+
+        // --- Shape Algorithms ---
+        function setShape(type) {
+            targetShape = type;
+            controls.autoRotateSpeed = (type === 'photo') ? 0 : 1.0; // Stop rotation for photos
+
+            if (type === 'photo') {
+                // If it's the photo mode, the loadPhoto function handles positions
+                // We just trigger a load of the current index
+                loadPhoto(PHOTO_LIST[currentPhotoIndex]);
+                return;
+            }
+
+            const tempColor = new THREE.Color();
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const i3 = i * 3;
+                let x, y, z;
+                let r, g, b;
+
+                if (type === 'tree') {
+                    // Spiral Cone Logic
+                    const h = Math.random() * 30; // Height 0 to 30
+                    const heightPercent = h / 30;
+                    const radius = (1 - heightPercent) * 10; // Wide base, narrow top
+                    const angle = h * 5 + (Math.random() * 0.5); // Spiral factor
+
+                    x = radius * Math.cos(angle);
+                    z = radius * Math.sin(angle);
+                    y = h - 15; // Center vertically
+
+                    // Colors: Mostly Green, some Red/Gold ornaments
+                    const seed = Math.random();
+                    if (seed > 0.95) { tempColor.setHex(0xff0000); } // Red Ornament
+                    else if (seed > 0.90) { tempColor.setHex(0xffd700); } // Gold
+                    else { tempColor.setHex(0x006400); } // Dark Green
+                }
+                else if (type === 'heart') {
+                    const phi = Math.random() * Math.PI * 2;
+                    const theta = Math.random() * Math.PI;
+                    const t = phi;
+                    let hx = 16 * Math.pow(Math.sin(t), 3);
+                    let hy = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+                    x = hx * 0.5; y = hy * 0.5; z = (Math.random() - 0.5) * 5;
+                    tempColor.setHex(0xff0055);
+                }
+                else if (type === 'star') {
+                    // Burst shape
+                    const u = Math.random() * Math.PI * 2;
+                    const v = Math.random() * Math.PI;
+                    const r = 12 * Math.pow(Math.sin(u * 5) * Math.sin(v * 5), 2) + 2;
+                    x = r * Math.sin(u) * Math.cos(v);
+                    y = r * Math.sin(u) * Math.sin(v);
+                    z = r * Math.cos(u);
+                    tempColor.setHex(0xffdd00);
+                }
+
+                targetPositions[i3] = x;
+                targetPositions[i3 + 1] = y;
+                targetPositions[i3 + 2] = z;
+
+                targetColors[i3] = tempColor.r;
+                targetColors[i3 + 1] = tempColor.g;
+                targetColors[i3 + 2] = tempColor.b;
+            }
+        }
+
+        // --- GUI ---
+        const gui = new GUI({ title: '🎄 Christmas Magic' });
+
+        const folderShapes = gui.addFolder('Shapes');
+        folderShapes.add({ fn: () => setShape('tree') }, 'fn').name('🎄 Christmas Tree');
+        folderShapes.add({ fn: () => setShape('heart') }, 'fn').name('❤️ Heart');
+        folderShapes.add({ fn: () => setShape('star') }, 'fn').name('⭐ Star');
+
+        const folderPhotos = gui.addFolder('Hidden Memories');
+        const photoControls = {
+            show: () => setShape('photo'),
+            next: () => {
+                currentPhotoIndex = (currentPhotoIndex + 1) % PHOTO_LIST.length;
+                if (targetShape === 'photo') loadPhoto(PHOTO_LIST[currentPhotoIndex]);
+            },
+            prev: () => {
+                currentPhotoIndex = (currentPhotoIndex - 1 + PHOTO_LIST.length) % PHOTO_LIST.length;
+                if (targetShape === 'photo') loadPhoto(PHOTO_LIST[currentPhotoIndex]);
+            }
+        };
+        folderPhotos.add(photoControls, 'show').name('🖼️ Reveal Photo');
+        folderPhotos.add(photoControls, 'next').name('⏩ Next Photo');
+        folderPhotos.add(photoControls, 'prev').name('⏪ Prev Photo');
+
+        // Initial launch
+        setShape('tree');
+
+        // --- Hand Tracking ---
+        function onResults(results) {
+            document.getElementById('loading').style.opacity = 0;
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                let totalOpenness = 0;
+                results.multiHandLandmarks.forEach((landmarks) => {
+                    const wrist = landmarks[0];
+                    const tip = landmarks[12];
+                    const distance = Math.sqrt(Math.pow(wrist.x - tip.x, 2) + Math.pow(wrist.y - tip.y, 2));
+                    let openVal = (distance - 0.15) * 5;
+                    totalOpenness += Math.max(0, Math.min(1, openVal));
+                });
+                handOpenness = totalOpenness / results.multiHandLandmarks.length;
+            } else {
+                handOpenness = 0.5; // Default state
+            }
+        }
+
+        const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        hands.onResults(onResults);
+
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({ image: videoElement }); },
+            width: 320, height: 240
+        });
+        cameraUtils.start();
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = 0.02; // fixed step for smoothness
+            time += delta;
+
+            const currentPos = geometry.attributes.position.array;
+            const currentCol = geometry.attributes.color.array;
+
+            // Hand Interactions
+            // If showing photo: Closing hands "scatters" the memory, Opening hands "clarifies" it.
+            // If showing tree: Closing hands shrinks it, Opening expands it.
+
+            let targetScale = 1.0;
+            let scatter = 0;
+
+            if (targetShape === 'photo') {
+                // For photo: Open hands = Clear image. Closed hands = Exploded pixels.
+                scatter = (1 - handOpenness) * 20.0; // Scatter distance
+                targetScale = 1.0;
+            } else {
+                targetScale = 0.5 + (handOpenness * 1.5);
+            }
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const i3 = i * 3;
+
+                // Position Interpolation
+                let tx = targetPositions[i3] * targetScale;
+                let ty = targetPositions[i3 + 1] * targetScale;
+                let tz = targetPositions[i3 + 2] * targetScale;
+
+                // Add scatter effect for photo mode
+                if (targetShape === 'photo' && scatter > 0.1) {
+                    tx += (Math.random() - 0.5) * scatter;
+                    ty += (Math.random() - 0.5) * scatter;
+                    tz += (Math.random() - 0.5) * scatter;
+                }
+
+                // Add slight noise to make it "alive"
+                if (targetShape === 'tree') {
+                    // Twinkle movement
+                    ty += Math.sin(time + i) * 0.02;
+                }
+
+                // Move position
+                currentPos[i3] += (tx - currentPos[i3]) * 0.08;
+                currentPos[i3 + 1] += (ty - currentPos[i3 + 1]) * 0.08;
+                currentPos[i3 + 2] += (tz - currentPos[i3 + 2]) * 0.08;
+
+                // Color Interpolation
+                currentCol[i3] += (targetColors[i3] - currentCol[i3]) * 0.05;
+                currentCol[i3 + 1] += (targetColors[i3 + 1] - currentCol[i3 + 1]) * 0.05;
+                currentCol[i3 + 2] += (targetColors[i3 + 2] - currentCol[i3 + 2]) * 0.05;
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+            geometry.attributes.color.needsUpdate = true;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>

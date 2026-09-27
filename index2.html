@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js Hand-Controlled Christmas Tree</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* UI Container */
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 250px;
+            background: rgba(40, 40, 40, 0.6);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            z-index: 100;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        h2 {
+            margin: 0 0 15px 0;
+            font-size: 1.2rem;
+            font-weight: 600;
+            letter-spacing: 1px;
+            color: #e74c3c;
+        }
+
+        /* Fullscreen */
+        #fs-btn {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: white;
+            padding: 10px;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            transition: background 0.3s;
+        }
+
+        #fs-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* Status */
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 0.8rem;
+            pointer-events: none;
+        }
+
+        .gesture-guide {
+            font-size: 0.85rem;
+            color: #ccc;
+            line-height: 1.8;
+        }
+
+        .gesture-icon {
+            width: 20px;
+            display: inline-block;
+            text-align: center;
+            margin-right: 8px;
+        }
+
+        /* Hidden Video for MediaPipe */
+        #input-video {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+
+    <video id="input-video"></video>
+
+    <div id="status">Initializing Camera & AI...</div>
+
+    <div id="ui-container">
+        <h2>🎄 Holiday Particles</h2>
+
+        <div class="gesture-guide">
+            <strong>Gesture Control:</strong><br>
+            <span class="gesture-icon">👋</span> Move hand left/right to rotate tree.<br>
+            <span class="gesture-icon">✋</span> Open hand to explode particles.<br>
+            <span class="gesture-icon">✊</span> Close fist to reform tree.
+        </div>
+    </div>
+
+    <button id="fs-btn" onclick="toggleFullScreen()">⛶</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <script>
+        // --- 1. CONFIGURATION & STATE ---
+        const PARTICLE_COUNT = 12000; // Increased count for denser tree
+        const PARTICLE_SIZE = 0.18;
+
+        // Gesture State
+        let handOpenness = 0; // 0 = Closed, 1 = Open
+        let handPositionX = 0.5; // 0.0 (Left) to 1.0 (Right)
+        let isHandDetected = false;
+
+        // --- 2. THREE.JS SETUP ---
+        const scene = new THREE.Scene();
+        // Darker night sky fog
+        scene.fog = new THREE.FogExp2(0x020205, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 18;
+        camera.position.y = 2;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        // --- 3. PARTICLE SYSTEM SETUP ---
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(PARTICLE_COUNT * 3);
+        const targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+        const colors = new Float32Array(PARTICLE_COUNT * 3);
+        // Store the specific tree colors here
+        const treeColors = new Float32Array(PARTICLE_COUNT * 3);
+
+        // Initial random explosion positions
+        for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+            positions[i] = (Math.random() - 0.5) * 50;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        // Use a texture for rounder, softer particles if desired, but simple squares work too.
+        const material = new THREE.PointsMaterial({
+            size: PARTICLE_SIZE,
+            vertexColors: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            transparent: true,
+            opacity: 0.9
+        });
+
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+        // --- 4. CHRISTMAS TREE GENERATOR ---
+        function generateChristmasTreeData() {
+            let pIndex = 0;
+            const trunkHeight = 3;
+            const treeHeight = 14;
+            const totalHeight = trunkHeight + treeHeight;
+            const yOffset = totalHeight / 2;
+
+            // 1. Trunk (Brown Cylinder) - approx 10% particles
+            const trunkParticles = Math.floor(PARTICLE_COUNT * 0.1);
+            for (let i = 0; i < trunkParticles; i++) {
+                const h = (Math.random() * trunkHeight);
+                const r = 0.6 * Math.sqrt(Math.random()); // Cylinder radius
+                const theta = Math.random() * Math.PI * 2;
+
+                targetPositions[pIndex * 3] = r * Math.cos(theta);
+                targetPositions[pIndex * 3 + 1] = h - yOffset;
+                targetPositions[pIndex * 3 + 2] = r * Math.sin(theta);
+
+                // Brown colors
+                treeColors[pIndex * 3] = 0.3 + Math.random() * 0.1; // R
+                treeColors[pIndex * 3 + 1] = 0.15 + Math.random() * 0.1; // G
+                treeColors[pIndex * 3 + 2] = 0.05; // B
+                pIndex++;
+            }
+
+            // 2. Leaves & Ornaments (Conical layers) - remaining particles
+            const leafParticles = PARTICLE_COUNT - trunkParticles;
+            for (let i = 0; i < leafParticles; i++) {
+                // Height ratio (0 at bottom of leaves, 1 at top)
+                const hRatio = Math.pow(Math.random(), 0.8); // Slight bias towards bottom
+                const h = trunkHeight + hRatio * treeHeight;
+
+                // Cone shape: Radius decreases as height increases.
+                const maxRAtHeight = 5.5 * (1 - hRatio);
+                // Fill the volume of the cone
+                const r = maxRAtHeight * Math.sqrt(Math.random());
+                const theta = Math.random() * Math.PI * 2;
+
+                targetPositions[pIndex * 3] = r * Math.cos(theta);
+                targetPositions[pIndex * 3 + 1] = h - yOffset;
+                targetPositions[pIndex * 3 + 2] = r * Math.sin(theta);
+
+                // Colors: Green shades vs Ornaments
+                const ornamentChance = 0.08; // 8% chance of being an ornament
+                if (Math.random() < ornamentChance && hRatio < 0.9) {
+                    // Ornament (Red or Gold)
+                    if (Math.random() > 0.5) {
+                        // Red ball
+                        treeColors[pIndex * 3] = 1.0;
+                        treeColors[pIndex * 3 + 1] = 0.1;
+                        treeColors[pIndex * 3 + 2] = 0.1;
+                    } else {
+                        // Gold light
+                        treeColors[pIndex * 3] = 1.0;
+                        treeColors[pIndex * 3 + 1] = 0.8;
+                        treeColors[pIndex * 3 + 2] = 0.1;
+                    }
+                } else {
+                    // Varied Green leaves
+                    treeColors[pIndex * 3] = 0.05 + Math.random() * 0.1; // Low R
+                    treeColors[pIndex * 3 + 1] = 0.4 + Math.random() * 0.4; // High G
+                    treeColors[pIndex * 3 + 2] = 0.05 + Math.random() * 0.1; // Low B
+                }
+                pIndex++;
+            }
+        }
+
+        // Initialize the tree data once
+        generateChristmasTreeData();
+
+
+        // --- 5. MEDIAPIPE LOGIC (Unchanged from V2) ---
+        const videoElement = document.getElementById('input-video');
+        const statusEl = document.getElementById('status');
+
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                isHandDetected = true;
+                statusEl.innerText = "Hand Detected | Gestures Active";
+                statusEl.style.color = "#7fff00";
+
+                const landmarks = results.multiHandLandmarks[0];
+
+                // Openness calc
+                const thumb = landmarks[4];
+                const index = landmarks[8];
+                const distance = Math.sqrt(Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2));
+                let openVal = (distance - 0.03) * 6;
+                openVal = Math.max(0, Math.min(1, openVal));
+                handOpenness += (openVal - handOpenness) * 0.1;
+
+                // Swipe position calc
+                const rawX = landmarks[9].x;
+                handPositionX += (rawX - handPositionX) * 0.1;
+
+            } else {
+                isHandDetected = false;
+                handOpenness += (0 - handOpenness) * 0.05;
+                statusEl.innerText = "No Hands Detected";
+                statusEl.style.color = "rgba(255,255,255,0.5)";
+            }
+        }
+
+        const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        hands.onResults(onResults);
+
+        const cameraFeed = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({ image: videoElement }); },
+            width: 640, height: 480
+        });
+        cameraFeed.start();
+
+        // --- 6. ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = clock.getElapsedTime();
+            const positionsAttr = geometry.attributes.position;
+            const colorsAttr = geometry.attributes.color;
+
+            // Gesture physics parameters
+            const diffusionFactor = handOpenness * 8.0; // Wider explosion for tree
+            const scaleFactor = 1.0 + (handOpenness * 0.8);
+
+            // Rotation Logic (Swipe only when fist detected)
+            if (isHandDetected) {
+                if (handOpenness < 0.25) {
+                    // tangan mengepal → swipe aktif
+                    const targetRotation = (handPositionX - 0.5) * (Math.PI * 2.5) * -1;
+                    particles.rotation.y += (targetRotation - particles.rotation.y) * 0.08;
+                }
+            } else {
+                particles.rotation.y += 0.002; // Slow idle spin
+            }
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const idx = i * 3;
+                const px = positionsAttr.array[idx];
+                const py = positionsAttr.array[idx + 1];
+                const pz = positionsAttr.array[idx + 2];
+
+                const tx = targetPositions[idx] * scaleFactor;
+                const ty = targetPositions[idx + 1] * scaleFactor;
+                const tz = targetPositions[idx + 2] * scaleFactor;
+
+                // Add noise based on hand openness
+                const noiseX = Math.sin(time * 1.5 + i * 0.1) * diffusionFactor;
+                const noiseY = Math.cos(time * 2.0 + i * 0.2) * diffusionFactor * 0.5; // Less vertical noise
+                const noiseZ = Math.sin(time * 1.8 + i * 0.3) * diffusionFactor;
+
+                // Move towards target
+                positionsAttr.array[idx] += (tx + noiseX - px) * 0.07;
+                positionsAttr.array[idx + 1] += (ty + noiseY - py) * 0.07;
+                positionsAttr.array[idx + 2] += (tz + noiseZ - pz) * 0.07;
+
+                // Apply the pre-calculated tree colors directly
+                colorsAttr.array[idx] = treeColors[idx];
+                colorsAttr.array[idx + 1] = treeColors[idx + 1];
+                colorsAttr.array[idx + 2] = treeColors[idx + 2];
+            }
+
+            positionsAttr.needsUpdate = true;
+            colorsAttr.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) { document.exitFullscreen(); }
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>
